@@ -46,7 +46,10 @@ online_regression::online_regression(double ridge, int max_iters,
   cublasErrorCheck(cublasCreate(&cublas_handle));
 }
 
-online_regression::~online_regression() { clear(); }
+online_regression::~online_regression() {
+  clear();
+  cublasDestroy_v2(cublas_handle);
+}
 
 std::vector<double> online_regression::predict(std::vector<double> X,
                                                size_t X_features,
