@@ -1,2 +1,3 @@
 # cuda-ml
-Machine learning algorithms written in Cuda
+Currently only a first prototype for ridge regression.
+
