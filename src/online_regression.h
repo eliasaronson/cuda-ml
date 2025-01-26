@@ -1,32 +1,29 @@
 #pragma once
 #include <cublas_v2.h>
 #include <cusolverDn.h>
+#include <stdexcept>
 #include <vector>
 // #include <thrust/device_vector.h>
 
 #define cusolverErrorCheck(err) __cusolverErrorCheck(err, __FILE__, __LINE__)
 inline void __cusolverErrorCheck(cusolverStatus_t err, const char *file,
-                                 const int line, bool abort = true) {
+                                 const int line) {
   if (CUSOLVER_STATUS_SUCCESS != err) {
     fprintf(stderr,
             "CUBLAS error in file '%s', line %d\n \nerror %d \nterminating!\n",
             __FILE__, __LINE__, err);
-    if (abort) {
-      exit(err);
-    }
+    throw std::runtime_error("Cusolver error");
   }
 }
 
 #define cublasErrorCheck(err) __cublasErrorCheck(err, __FILE__, __LINE__)
 inline void __cublasErrorCheck(cublasStatus_t err, const char *file,
-                               const int line, bool abort = true) {
+                               const int line) {
   if (CUBLAS_STATUS_SUCCESS != err) {
     fprintf(stderr,
             "CUBLAS error in file '%s', line %d\n \nerror %d \nterminating!\n",
             __FILE__, __LINE__, err);
-    if (abort) {
-      exit(err);
-    }
+    throw std::runtime_error("Cublas error");
   }
 }
 
@@ -34,14 +31,11 @@ inline void __cublasErrorCheck(cublasStatus_t err, const char *file,
   {                                                                            \
     gpuAssert((ans), __FILE__, __LINE__);                                      \
   }
-inline void gpuAssert(cudaError_t code, const char *file, int line,
-                      bool abort = true) {
+inline void gpuAssert(cudaError_t code, const char *file, int line) {
   if (code != cudaSuccess) {
     fprintf(stderr, "Cuda error: %s %s %d\n", cudaGetErrorString(code), file,
             line);
-    if (abort) {
-      exit(code);
-    }
+    throw std::runtime_error("Cuda error");
   }
 }
 
