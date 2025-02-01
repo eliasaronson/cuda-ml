@@ -68,6 +68,8 @@ class online_regression {
   size_t num_x_features = 0;
   size_t num_y_features = 0;
 
+  int max_threads_per_block = -1;
+
 public:
   online_regression(double ridge = 0.1, int max_iters = 50,
                     double tolerance = 1e-20);
@@ -87,10 +89,8 @@ public:
 
   void clear();
 
-  // TODO: Implement
-  // double score(std::vector<double> X, size_t X_features, std::vector<double>
-  // Y, size_t Y_features);
-  double score(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n);
-
-  void test();
+  double score(std::vector<double> X, size_t X_features, std::vector<double> Y,
+               size_t Y_features);
+  double score(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n,
+               bool y_padded = false);
 };
