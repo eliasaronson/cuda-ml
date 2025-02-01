@@ -88,7 +88,9 @@ public:
   void clear();
 
   // TODO: Implement
-  double score(std::vector<double> X, size_t X_features, std::vector<double> Y,
-               size_t Y_features);
+  // double score(std::vector<double> X, size_t X_features, std::vector<double>
+  // Y, size_t Y_features);
   double score(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n);
+
+  void test();
 };

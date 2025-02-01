@@ -41,5 +41,7 @@ int main() {
 
   reg.predict(x, X_features, Y_features);
 
+  reg.test();
+
   std::cout << "test\n";
 }

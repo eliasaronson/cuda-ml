@@ -7,6 +7,8 @@ project(cuda_ml LANGUAGES CUDA CXX)
 find_package(CUDAToolkit REQUIRED)
 
 add_executable(main src/main.cc src/online_regression.cu)
+# TODO: How to handle atomicAdd without building each arch?
+set_target_properties(main PROPERTIES CUDA_ARCHITECTURES "75")
 
 include(FetchContent)
 # Also requires one of: libbfd (gnu binutils), libdwarf, libdw (elfutils)

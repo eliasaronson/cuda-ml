@@ -1,4 +1,6 @@
 #include "online_regression.h"
+#include <chrono>
+#include <cooperative_groups.h>
 #include <iostream> // Only needed for debugging
 
 namespace {
@@ -344,4 +346,209 @@ void online_regression::clear() {
 void score(std::vector<double> X, size_t X_features, std::vector<double> Y,
            size_t Y_features) {}
 
-void score(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n) {}
+__device__ double4 operator+(const double4 &d1, const double4 &d2) {
+  return {d1.x + d2.x, d1.y + d2.y, d1.z + d2.z, d1.w + d2.w};
+}
+
+__device__ double4 operator+(const double4 &d1, const double &d2) {
+  return {d1.x + d2, d1.y + d2, d1.z + d2, d1.w + d2};
+}
+
+__device__ double4 operator-(const double4 &d1, const double4 &d2) {
+  return {d1.x - d2.x, d1.y - d2.y, d1.z - d2.z, d1.w - d2.w};
+}
+
+__device__ double4 operator-(const double4 &d1, const double &d2) {
+  return {d1.x - d2, d1.y - d2, d1.z - d2, d1.w - d2};
+}
+
+__device__ double4 operator*(const double4 &d1, const double4 &d2) {
+  return {d1.x * d2.x, d1.y * d2.y, d1.z * d2.z, d1.w * d2.w};
+}
+
+/*__global__ void r2_numerator(double *numerator, const double *y_true,
+                             const double *y_pred, int n) {
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < floorf((float)n / 4);
+       i += blockDim.x * gridDim.x) {
+    double4 diff = ((double4 *)y_true)[i] - ((double4 *)y_pred)[i];
+    ((double4 *)numerator)[i] = diff * diff;
+  }
+  // Finial thread handles the final values if n % 4 != 0. Could also be
+  // handled from the outside by padding.
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid == (int)floorf((float)n / 4) + 1) {
+    for (int i = 0; i < n % 4; ++i) {
+      double diff = y_true[tid] - y_pred[tid];
+      numerator[tid] = diff * diff;
+    }
+  }
+}
+
+__global__ void r2_denominator(double *numerator, const double *y_true,
+                               const double *y_average, const int m,
+                               const int n) {
+  for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < n;
+       j += blockDim.x * gridDim.x) {
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m;
+         i += blockDim.x * gridDim.x) {
+      double diff = y_true[j * m + i] - y_average[j];
+      numerator[j * m + i] = diff * diff;
+    }
+  }
+}*/
+
+namespace cg = cooperative_groups;
+
+template <int tile_sz>
+__device__ double reduce_sum_tile_shfl(cg::thread_block_tile<tile_sz> g,
+                                       double val) {
+  // Each iteration halves the number of active threads
+  // Each thread adds its partial sum[i] to sum[lane-i]
+  for (int i = g.size() / 2; i > 0; i /= 2) {
+    val += g.shfl_down(val, i);
+  }
+
+  // Thread 0 returns the sum
+  return val;
+}
+
+/* ----- R2 numerator ----- */
+// Handles a double vectors as double4 to do simd instructions. TODO: Check if
+// these actually exists for doubles
+__device__ double thread_sumed_sqrt_diff(const double4 *y_true,
+                                         const double4 *y_pred, int n) {
+  double sum = 0;
+
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n / 4;
+       i += blockDim.x * gridDim.x) {
+    double4 diff = y_true[i] - y_pred[i];
+    diff = diff * diff;
+    sum += diff.x + diff.y + diff.z + diff.w;
+  }
+  return sum;
+}
+
+template <int tile_sz>
+__global__ void r2_numerator(double *sum, const double *y_true,
+                             const double *y_pred, int n) {
+  // Allow fewer threads than elements
+  double thread_sum =
+      thread_sumed_sqrt_diff((double4 *)y_true, (double4 *)y_pred, n);
+
+  auto tile = cg::tiled_partition<tile_sz>(cg::this_thread_block());
+  double tile_sum = reduce_sum_tile_shfl<tile_sz>(tile, thread_sum);
+
+  if (tile.thread_rank() == 0) {
+    atomicAdd(sum, tile_sum);
+  }
+}
+
+/* ----- R2 denominator ----- */
+// Might be worth to transpose y_true to avoid the modulus operation and for
+// better access pattern of y_avg.
+__device__ double thread_sumed_sqrt_diff(const double *y_true,
+                                         const double *y_avg, int n_features,
+                                         int n) {
+  double sum = 0;
+
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
+       i += blockDim.x * gridDim.x) {
+    int j = i % n_features;
+    double diff = y_true[i] - y_avg[j];
+    sum += diff * diff;
+  }
+  return sum;
+}
+
+template <int tile_sz>
+__global__ void r2_denominator(double *sum, const double *y_true,
+                               const double *y_avg, int n_features, int n) {
+  // Allow fewer threads than elements
+  double thread_sum = thread_sumed_sqrt_diff(y_true, y_avg, n_features, n);
+
+  auto tile = cg::tiled_partition<tile_sz>(cg::this_thread_block());
+  double tile_sum = reduce_sum_tile_shfl<tile_sz>(tile, thread_sum);
+
+  if (tile.thread_rank() == 0) {
+    atomicAdd(sum, tile_sum);
+  }
+}
+
+void online_regression::test() {
+  int n = 1 << 24;
+  int n_features = 4;
+  std::vector<double> h_y_true(n, 2.);
+  std::vector<double> h_y_pred = {1, 1, 2, 2};
+
+  int blockSize = 256;
+  int nBlocks = (n + blockSize - 1) / blockSize;
+
+  double *sum, *y_true, *y_pred;
+  cudaMalloc(&sum, sizeof(double));
+  cudaMalloc(&y_true, n * sizeof(double));
+  cudaMalloc(&y_pred, n_features * sizeof(double));
+  cudaMemcpy(y_true, h_y_true.data(), sizeof(double) * n,
+             cudaMemcpyHostToDevice);
+  cudaMemcpy(y_pred, h_y_pred.data(), sizeof(double) * n_features,
+             cudaMemcpyHostToDevice);
+  cudaMemset(sum, 0, sizeof(double));
+
+  auto t1 = std::chrono::high_resolution_clock::now();
+  printf("blocks: %i, blockSize: %i\n", nBlocks, blockSize);
+  // r2_numerator<32><<<nBlocks, blockSize>>>(sum, y_true, y_pred, n);
+  r2_denominator<32>
+      <<<nBlocks, blockSize>>>(sum, y_true, y_pred, n_features, n);
+  cudaDeviceSynchronize();
+  auto time_span = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::high_resolution_clock::now() - t1);
+  std::cout << "shfl: " << time_span.count() << " μs.\n";
+
+  double h_sum;
+  cudaMemcpy(&h_sum, sum, sizeof(double), cudaMemcpyDeviceToHost);
+  printf("sum: %f, n: %i\n", (float)h_sum, n);
+}
+
+// * I need the y_average
+//      - Easiest to do with a cublas call, but less fun
+// * numerator = sum((y_true - y_pred) ** 2)
+//      - Kernel
+// * denominator = sum((y_true - y_average) ** 2)
+//      - Kernel
+double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
+                                size_t XY_n) {
+  if (XY_n < 2) {
+    printf("Warning! R2 requires at least two samples.\n");
+  }
+
+  double *Y_pred, *numerator, *denominator, *Y_average;
+
+  cudaErrorCheck(cudaMalloc(&Y_pred, sizeof(double) * Y_m * XY_n));
+  cudaErrorCheck(cudaMalloc(&numerator, sizeof(double) * Y_m * XY_n));
+  cudaErrorCheck(cudaMalloc(&denominator, sizeof(double) * Y_m * XY_n));
+  cudaErrorCheck(cudaMalloc(&Y_average, sizeof(double) * Y_m));
+
+  // Get prediction
+  predict(X, Y_pred, X_m, Y_m, XY_n);
+
+  dim3 block_dim(256);
+  dim3 grid_dim;
+  grid_dim.x = ((Y_m * XY_n + 1) + block_dim.x - 1) / block_dim.x;
+  // r2_numerator<<<grid_dim, block_dim>>>(numerator, Y, Y_pred, Y_m * XY_n);
+  // TODO: Add padding. Is n % 4 enough?
+  r2_numerator<32><<<grid_dim, block_dim>>>(numerator, Y, Y_pred, Y_m * XY_n);
+  // TODO: Sum denominator
+
+  // TODO: Calulate y_average
+
+  // TODO: Get max block size
+  r2_denominator<32>
+      <<<grid_dim, block_dim>>>(sum, y_true, y_pred, n_features, n);
+  // block_dim = {16, 16, 0};
+  // grid_dim.x = (Y_m + block_dim.x - 1) / block_dim.x;
+  // grid_dim.y = (XY_n + block_dim.y - 1) / block_dim.y;
+  // r2_denominator<<<grid_dim, block_dim>>>(denominator, Y, Y_average, Y_m,
+  // XY_n);
+  // TODO: Sum denominator
+
+  return 0;
+}
