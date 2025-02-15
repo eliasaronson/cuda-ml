@@ -164,7 +164,7 @@ online_regression::~online_regression() {
   cublasDestroy_v2(cublas_handle);
 }
 
-std::vector<double> online_regression::predict(std::vector<double> X,
+std::vector<double> online_regression::predict(const std::vector<double> &X,
                                                size_t X_features,
                                                size_t Y_features) {
   size_t n_samples = X.size() / X_features;
@@ -206,8 +206,10 @@ double *online_regression::predict(double *X, double *Y, size_t X_m, size_t Y_m,
   return Y;
 }
 
-void online_regression::partial_fit(std::vector<double> X, size_t X_features,
-                                    std::vector<double> Y, size_t Y_features) {
+void online_regression::partial_fit(const std::vector<double> &X,
+                                    size_t X_features,
+                                    const std::vector<double> &Y,
+                                    size_t Y_features) {
   if (X.size() / X_features != Y.size() / Y_features) {
     printf("Error! X and Y have different number of samples.\n");
     return;
@@ -217,9 +219,11 @@ void online_regression::partial_fit(std::vector<double> X, size_t X_features,
   cudaMalloc(&d_X, sizeof(double) * X.size());
   cudaMalloc(&d_Y, sizeof(double) * Y.size());
 
-  cudaMemcpy(d_X, X.data(), X.size() * sizeof(decltype(X)::value_type),
+  cudaMemcpy(d_X, X.data(),
+             X.size() * sizeof(std::decay_t<decltype(X)>::value_type),
              cudaMemcpyHostToDevice);
-  cudaMemcpy(d_Y, Y.data(), Y.size() * sizeof(decltype(Y)::value_type),
+  cudaMemcpy(d_Y, Y.data(),
+             Y.size() * sizeof(std::decay_t<decltype(Y)>::value_type),
              cudaMemcpyHostToDevice);
 
   partial_fit(d_X, d_Y, X_features, Y_features, X.size() / X_features);
@@ -303,8 +307,8 @@ void online_regression::partial_fit(double *X, double *Y, size_t X_m,
   printm("XXt_partial", XXt_partial, X_m, X_m);
 }
 
-void online_regression::fit(std::vector<double> X, size_t X_features,
-                            std::vector<double> Y, size_t Y_features) {
+void online_regression::fit(const std::vector<double> &X, size_t X_features,
+                            const std::vector<double> &Y, size_t Y_features) {
   partial_fit(X, X_features, Y, Y_features);
   fit(nullptr, nullptr, X_features, Y_features, X.size() / X_features);
 }

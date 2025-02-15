@@ -76,16 +76,16 @@ public:
   ~online_regression();
 
   double *predict(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n);
-  std::vector<double> predict(std::vector<double> X, size_t X_features,
+  std::vector<double> predict(const std::vector<double> &X, size_t X_features,
                               size_t Y_features);
 
   void partial_fit(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n);
-  void partial_fit(std::vector<double> X, size_t X_features,
-                   std::vector<double> Y, size_t Y_features);
+  void partial_fit(const std::vector<double> &X, size_t X_features,
+                   const std::vector<double> &Y, size_t Y_features);
 
   void fit(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n);
-  void fit(std::vector<double> X, size_t X_features, std::vector<double> Y,
-           size_t Y_features);
+  void fit(const std::vector<double> &X, size_t X_features,
+           const std::vector<double> &Y, size_t Y_features);
 
   void clear();
 
