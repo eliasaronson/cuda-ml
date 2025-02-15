@@ -40,6 +40,7 @@ int main() {
   reg.fit(nullptr, nullptr, X_features, Y_features, x.size() / X_features);
 
   reg.predict(x, X_features, Y_features);
+  double score = reg.score(x, X_features, y, Y_features);
 
-  std::cout << "test\n";
+  printf("score: %.10e\n", score);
 }

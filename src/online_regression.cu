@@ -62,37 +62,6 @@ __device__ double4 operator*(const double4 &d1, const double4 &d2) {
   return {d1.x * d2.x, d1.y * d2.y, d1.z * d2.z, d1.w * d2.w};
 }
 
-/*__global__ void r2_numerator(double *numerator, const double *y_true,
-                             const double *y_pred, int n) {
-  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < floorf((float)n / 4);
-       i += blockDim.x * gridDim.x) {
-    double4 diff = ((double4 *)y_true)[i] - ((double4 *)y_pred)[i];
-    ((double4 *)numerator)[i] = diff * diff;
-  }
-  // Finial thread handles the final values if n % 4 != 0. Could also be
-  // handled from the outside by padding.
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (tid == (int)floorf((float)n / 4) + 1) {
-    for (int i = 0; i < n % 4; ++i) {
-      double diff = y_true[tid] - y_pred[tid];
-      numerator[tid] = diff * diff;
-    }
-  }
-}
-
-__global__ void r2_denominator(double *numerator, const double *y_true,
-                               const double *y_average, const int m,
-                               const int n) {
-  for (int j = blockIdx.x * blockDim.x + threadIdx.x; j < n;
-       j += blockDim.x * gridDim.x) {
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < m;
-         i += blockDim.x * gridDim.x) {
-      double diff = y_true[j * m + i] - y_average[j];
-      numerator[j * m + i] = diff * diff;
-    }
-  }
-}*/
-
 namespace cg = cooperative_groups;
 
 template <int tile_sz>
@@ -114,7 +83,6 @@ __device__ double reduce_sum_tile_shfl(cg::thread_block_tile<tile_sz> g,
 __device__ double thread_sumed_sqrt_diff(const double4 *y_true,
                                          const double4 *y_pred, int n) {
   double sum = 0;
-
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n / 4;
        i += blockDim.x * gridDim.x) {
     double4 diff = y_true[i] - y_pred[i];
@@ -130,6 +98,7 @@ __global__ void r2_numerator(double *sum, const double *y_true,
   // Allow fewer threads than elements
   double thread_sum =
       thread_sumed_sqrt_diff((double4 *)y_true, (double4 *)y_pred, n);
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
 
   auto tile = cg::tiled_partition<tile_sz>(cg::this_thread_block());
   double tile_sum = reduce_sum_tile_shfl<tile_sz>(tile, thread_sum);
@@ -457,7 +426,8 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
 #define CHECK_AND_FREE(PTR, FREE)                                              \
   if (PTR != nullptr) {                                                        \
     FREE(PTR);                                                                 \
-  }
+  }                                                                            \
+  PTR = nullptr;
 
   // Clean up
   CHECK_AND_FREE(tmp, cudaFree)
@@ -485,25 +455,48 @@ void online_regression::clear() {
 
 #undef CHECK_AND_FREE
 
-// TODO: Implement
-double online_regression::score(std::vector<double> X, size_t X_features,
-                                std::vector<double> Y, size_t Y_features) {
-  return 0;
+double online_regression::score(const std::vector<double> &X, size_t X_features,
+                                const std::vector<double> &Y,
+                                size_t Y_features) {
+  size_t n_samples = X.size() / X_features;
+  size_t pad = ((4 - (Y.size() % 4)) % 4);
+
+  double *d_X, *d_Y;
+
+  cudaErrorCheck(cudaMalloc(&d_X, sizeof(double) * X.size()));
+  cudaErrorCheck(cudaMalloc(&d_Y, sizeof(double) * (Y.size() + pad)));
+
+  cudaErrorCheck(cudaMemcpy(d_X, X.data(), sizeof(double) * X.size(),
+                            cudaMemcpyHostToDevice));
+  cudaErrorCheck(cudaMemcpy(d_Y, Y.data(), sizeof(double) * Y.size(),
+                            cudaMemcpyHostToDevice));
+
+  if (pad > 0) {
+    cudaErrorCheck(cudaMemset(d_Y + Y.size(), 0, pad * sizeof(double)));
+  }
+
+  printf("X_feat; %u, Y_feat: %u, n_samples: %u\n", X_features, Y_features,
+         n_samples);
+  double res = score(d_X, d_Y, X_features, Y_features, n_samples, true);
+
+  cudaErrorCheck(cudaFree(d_X));
+  cudaErrorCheck(cudaFree(d_Y));
+
+  return res;
 }
 
-// TODO: Test
 // R2 score. Y should be padded to be divisible by 4 or it will need to be
 // reallocated (this is probably not the best solution).
 double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
-                                size_t XY_n, bool y_padded) {
+                                size_t XY_n, bool padded) {
   if (XY_n < 2) {
     printf("Warning! R2 requires at least two samples.\n");
   }
 
   double *Y_padded, *Y_pred, *numerator, *denominator, *Y_average, *Y_div;
 
-  int pad = ((4 - (Y_m * XY_n % 4)) % 4);
-  int y_sz = Y_m * XY_n + pad;
+  size_t pad = ((4 - (Y_m * XY_n % 4)) % 4);
+  size_t y_sz = Y_m * XY_n + pad;
   cudaErrorCheck(cudaMalloc(&Y_pred, sizeof(double) * y_sz));
   cudaErrorCheck(cudaMalloc(&numerator, sizeof(double)));
   cudaErrorCheck(cudaMalloc(&denominator, sizeof(double)));
@@ -511,16 +504,16 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
   cudaErrorCheck(cudaMalloc(&Y_average, sizeof(double) * Y_m));
 
   // Probably not worth it, unless already padded from the outside
-  if (pad != 0) {
-    cudaErrorCheck(cudaMemset(Y_pred + Y_m * XY_n, 0, pad));
+  if (pad > 0) {
+    cudaErrorCheck(cudaMemset(Y_pred + Y_m * XY_n, 0, pad * sizeof(double)));
   }
-  if (!y_padded && pad != 0) {
+  if (!padded && pad > 0) {
     cudaErrorCheck(cudaMalloc(&Y_padded, sizeof(double) * y_sz));
     cudaErrorCheck(cudaMemcpy(Y_padded, Y, sizeof(double) * Y_m * XY_n,
                               cudaMemcpyDeviceToDevice));
-    cudaErrorCheck(cudaMemset(Y_padded + Y_m * XY_n, 0, pad));
+    cudaErrorCheck(cudaMemset(Y_padded + Y_m * XY_n, 0, pad * sizeof(double)));
   } else {
-    y_padded = Y;
+    Y_padded = Y;
   }
 
   // Get prediction
@@ -532,10 +525,11 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
   dim3 block_dim(max_threads_per_block);
   dim3 grid_dim;
   grid_dim.x = (XY_n + block_dim.x - 1) / block_dim.x;
-  fill<<<grid_dim, block_dim>>>(Y_div, 1 / XY_n, XY_n);
+  fill<<<grid_dim, block_dim>>>(Y_div, 1. / XY_n, XY_n);
 
   grid_dim.x = (y_sz + block_dim.x - 1) / block_dim.x;
   r2_numerator<32><<<grid_dim, block_dim>>>(numerator, Y_padded, Y_pred, y_sz);
+  printm("numerator", numerator, 1, 1);
 
   double alpha = 1., beta = 0.;
   cublasErrorCheck(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m, 1,
@@ -545,6 +539,7 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
 
   r2_denominator<32>
       <<<grid_dim, block_dim>>>(denominator, Y, Y_average, Y_m, Y_m * XY_n);
+  printm("denominator", denominator, 1, 1);
 
   double h_denominator, h_numerator;
   cudaMemcpy(&h_numerator, numerator, sizeof(double), cudaMemcpyDeviceToHost);
@@ -556,9 +551,9 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
   cudaErrorCheck(cudaFree(denominator));
   cudaErrorCheck(cudaFree(Y_div));
   cudaErrorCheck(cudaFree(Y_average));
-  if (!y_padded && pad != 0) {
+  if (!padded && pad != 0) {
     cudaFree(Y_padded);
   }
 
-  return h_numerator / h_denominator;
+  return 1. - h_numerator / h_denominator;
 }
