@@ -1,27 +1,11 @@
 #include "online_regression.h"
-#include <chrono>
+#include "utils.cuh"
 #include <cooperative_groups.h>
-#include <iostream> // Only needed for debugging
+#include <cublas_v2.h>
+#include <cusolverDn.h>
+#include <stdexcept>
 
 namespace {
-void printm(std::string label, double *A, size_t m, size_t n) {
-  std::cout << label << " " << m << "x" << n << ":\n";
-  double h_A[m * n];
-  cudaErrorCheck(
-      cudaMemcpy(h_A, A, m * n * sizeof(double), cudaMemcpyDeviceToHost));
-
-  for (int i = 0; i < m; ++i) {
-    for (int j = 0; j < n; ++j) {
-      printf("%f", h_A[i + j * m]);
-      if (j != n - 1) {
-        printf(", ");
-      }
-    }
-    printf("\n");
-  }
-  printf("\n");
-}
-
 // XXᵀ is square so the leading dimension and the minimum dimension is the same
 __global__ void add_ridge(double *A, double ridge, int lead_dim) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -39,27 +23,6 @@ void transpose(cublasHandle_t &cublas_handle, double *A, double *A_clone,
 
   cublasDgeam(cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, m, n, &alpha, A_clone, n,
               &beta, A_clone, m, C, m);
-}
-
-// TODO: Move to utility file
-__device__ double4 operator+(const double4 &d1, const double4 &d2) {
-  return {d1.x + d2.x, d1.y + d2.y, d1.z + d2.z, d1.w + d2.w};
-}
-
-__device__ double4 operator+(const double4 &d1, const double &d2) {
-  return {d1.x + d2, d1.y + d2, d1.z + d2, d1.w + d2};
-}
-
-__device__ double4 operator-(const double4 &d1, const double4 &d2) {
-  return {d1.x - d2.x, d1.y - d2.y, d1.z - d2.z, d1.w - d2.w};
-}
-
-__device__ double4 operator-(const double4 &d1, const double &d2) {
-  return {d1.x - d2, d1.y - d2, d1.z - d2, d1.w - d2};
-}
-
-__device__ double4 operator*(const double4 &d1, const double4 &d2) {
-  return {d1.x * d2.x, d1.y * d2.y, d1.z * d2.z, d1.w * d2.w};
 }
 
 namespace cg = cooperative_groups;
@@ -98,7 +61,6 @@ __global__ void r2_numerator(double *sum, const double *y_true,
   // Allow fewer threads than elements
   double thread_sum =
       thread_sumed_sqrt_diff((double4 *)y_true, (double4 *)y_pred, n);
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
 
   auto tile = cg::tiled_partition<tile_sz>(cg::this_thread_block());
   double tile_sum = reduce_sum_tile_shfl<tile_sz>(tile, thread_sum);
@@ -138,15 +100,9 @@ __global__ void r2_denominator(double *sum, const double *y_true,
     atomicAdd(sum, tile_sum);
   }
 }
-
-__global__ void fill(double *vec, double val, int n) {
-  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
-       i += blockDim.x * gridDim.x) {
-    vec[i] = val;
-  }
-}
 } // namespace
 
+namespace ml {
 online_regression::online_regression(double ridge, int max_iters,
                                      double tolerance)
     : ridge(ridge), max_iters(max_iters), tolerance(tolerance) {
@@ -529,7 +485,7 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
   dim3 block_dim(max_threads_per_block);
   dim3 grid_dim;
   grid_dim.x = (XY_n + block_dim.x - 1) / block_dim.x;
-  fill<<<grid_dim, block_dim>>>(Y_div, 1. / XY_n, XY_n);
+  fill<double><<<grid_dim, block_dim>>>(Y_div, 1. / XY_n, XY_n);
 
   grid_dim.x = (y_sz + block_dim.x - 1) / block_dim.x;
   r2_numerator<32><<<grid_dim, block_dim>>>(numerator, Y_padded, Y_pred, y_sz);
@@ -561,3 +517,4 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
 
   return 1. - h_numerator / h_denominator;
 }
+} // namespace ml

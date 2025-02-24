@@ -6,7 +6,7 @@
 backward::SignalHandling sh;
 
 int main() {
-  online_regression reg(0.001);
+  ml::online_regression reg(0.001);
 
   // std::vector<double> x = {1, 2, 3, 11, 12, 13};
   // std::vector<double> w = {2, 4, 6};

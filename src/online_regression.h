@@ -1,43 +1,8 @@
 #pragma once
 #include <cublas_v2.h>
 #include <cusolverDn.h>
-#include <stdexcept>
 #include <vector>
 // #include <thrust/device_vector.h>
-
-#define cusolverErrorCheck(err) __cusolverErrorCheck(err, __FILE__, __LINE__)
-inline void __cusolverErrorCheck(cusolverStatus_t err, const char *file,
-                                 const int line) {
-  if (CUSOLVER_STATUS_SUCCESS != err) {
-    fprintf(stderr,
-            "CUBLAS error in file '%s', line %d\n \nerror %d \nterminating!\n",
-            __FILE__, __LINE__, err);
-    throw std::runtime_error("Cusolver error");
-  }
-}
-
-#define cublasErrorCheck(err) __cublasErrorCheck(err, __FILE__, __LINE__)
-inline void __cublasErrorCheck(cublasStatus_t err, const char *file,
-                               const int line) {
-  if (CUBLAS_STATUS_SUCCESS != err) {
-    fprintf(stderr,
-            "CUBLAS error in file '%s', line %d\n \nerror %d \nterminating!\n",
-            __FILE__, __LINE__, err);
-    throw std::runtime_error("Cublas error");
-  }
-}
-
-#define cudaErrorCheck(ans)                                                    \
-  {                                                                            \
-    gpuAssert((ans), __FILE__, __LINE__);                                      \
-  }
-inline void gpuAssert(cudaError_t code, const char *file, int line) {
-  if (code != cudaSuccess) {
-    fprintf(stderr, "Cuda error: %s %s %d\n", cudaGetErrorString(code), file,
-            line);
-    throw std::runtime_error("Cuda error");
-  }
-}
 
 // TODO: Move error checking to utility header
 // TODO: Remove debug prints
@@ -46,6 +11,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line) {
 // TODO: Add scoring function
 // TODO: change to templates or just use float?? How does this affect accuracy
 // and performance?
+namespace ml {
 class online_regression {
   cublasHandle_t cublas_handle;
 
@@ -94,3 +60,4 @@ public:
   double score(double *X, double *Y, size_t X_m, size_t Y_m, size_t XY_n,
                bool padded = false);
 };
+} // namespace ml
