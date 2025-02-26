@@ -423,7 +423,7 @@ double online_regression::score(const std::vector<double> &X, size_t X_features,
                                 const std::vector<double> &Y,
                                 size_t Y_features) {
     size_t n_samples = X.size() / X_features;
-    size_t pad = ((4 - (Y.size() % 4)) % 4);
+    size_t pad = num_extra_to_pad(Y.size());
 
     double *d_X, *d_Y;
 
@@ -459,7 +459,7 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
 
     double *Y_padded, *Y_pred, *numerator, *denominator, *Y_average, *Y_div;
 
-    size_t pad = ((4 - (Y_m * XY_n % 4)) % 4);
+    size_t pad = num_extra_to_pad(Y_m * XY_n);
     size_t y_sz = Y_m * XY_n + pad;
     cudaErrorCheck(cudaMalloc(&Y_pred, sizeof(double) * y_sz));
     cudaErrorCheck(cudaMalloc(&numerator, sizeof(double)));
@@ -484,6 +484,8 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
 
     // Get prediction
     predict(X, Y_pred, X_m, Y_m, XY_n);
+    printm("Y", Y, Y_m, XY_n);
+    printm("Y_pred", Y_pred, Y_m, XY_n);
 
     // We should not be register limited, so should not be a problem to max out
     // the blocks when we have large matrices. Might be more efficient to use

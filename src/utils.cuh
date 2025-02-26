@@ -86,4 +86,8 @@ void printm(std::string label, double *A, size_t m, size_t n) {
     printf("\n");
 }
 
+inline size_t num_extra_to_pad(size_t count, size_t pad_to = 4) {
+    return ((4 - (count % 4)) % 4);
+}
+
 } // namespace ml
