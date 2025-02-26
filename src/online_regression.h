@@ -1,19 +1,17 @@
 #pragma once
-#include <cublas_v2.h>
-#include <cusolverDn.h>
 #include <vector>
 // #include <thrust/device_vector.h>
 
-// TODO: Move error checking to utility header
 // TODO: Remove debug prints
 // TODO: Naming case styles
-// TODO: Add namespace
-// TODO: Add scoring function
 // TODO: change to templates or just use float?? How does this affect accuracy
 // and performance?
+
+typedef struct cublasContext *cublasHandle_t;
+
 namespace ml {
 class online_regression {
-  cublasHandle_t cublas_handle;
+  cublasHandle_t *cublas_handle;
 
   // Settings
   float ridge;

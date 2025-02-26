@@ -106,7 +106,8 @@ namespace ml {
 online_regression::online_regression(double ridge, int max_iters,
                                      double tolerance)
     : ridge(ridge), max_iters(max_iters), tolerance(tolerance) {
-  cublasErrorCheck(cublasCreate(&cublas_handle));
+  cublas_handle = new cublasHandle_t;
+  cublasErrorCheck(cublasCreate(cublas_handle));
   int device;
   cudaGetDevice(&device);
 
@@ -117,7 +118,8 @@ online_regression::online_regression(double ridge, int max_iters,
 
 online_regression::~online_regression() {
   clear();
-  cublasDestroy_v2(cublas_handle);
+  cublasDestroy_v2(*cublas_handle);
+  delete cublas_handle;
 }
 
 std::vector<double> online_regression::predict(const std::vector<double> &X,
@@ -155,7 +157,7 @@ double *online_regression::predict(double *X, double *Y, size_t X_m, size_t Y_m,
   printm("X test", X, X_m, XY_n);
 
   // Y = W * X
-  cublasErrorCheck(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
+  cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
                                XY_n, X_m, &alpha, W, Y_m, X, X_m, &beta, Y,
                                Y_m));
 
@@ -238,26 +240,26 @@ void online_regression::partial_fit(double *X, double *Y, size_t X_m,
   }
 
   // Y * Xᵀ
-  cublasErrorCheck(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, Y_m,
+  cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, Y_m,
                                X_m, XY_n, &alpha, Y, Y_m, X, X_m, &beta, YXt,
                                Y_m));
   printm("YXt", YXt, Y_m, X_m);
 
   // X * Xᵀ
-  cublasErrorCheck(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, X_m,
+  cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, X_m,
                                X_m, XY_n, &alpha, X, X_m, X, X_m, &beta, XXt,
                                X_m));
 
   printm("XXt", XXt, X_m, X_m);
 
   // Accumulate YXᵀ and XXᵀ for further partial fits or to fully solve
-  cublasErrorCheck(cublasDgeam(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
+  cublasErrorCheck(cublasDgeam(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
                                X_m, &alpha, YXt_partial, Y_m, &alpha, YXt, Y_m,
                                YXt_partial, Y_m));
 
   printm("YXt_partial", YXt_partial, Y_m, X_m);
 
-  cublasErrorCheck(cublasDgeam(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, X_m,
+  cublasErrorCheck(cublasDgeam(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, X_m,
                                X_m, &alpha, XXt_partial, X_m, &alpha, XXt, X_m,
                                XXt_partial, X_m));
   printm("XXt_partial", XXt_partial, X_m, X_m);
@@ -314,7 +316,7 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
 
   cudaMalloc(&tmp, sizeof(double) * X_m * Y_m);
 
-  transpose(cublas_handle, YXt_partial, tmp, B, Y_m, X_m);
+  transpose(*cublas_handle, YXt_partial, tmp, B, Y_m, X_m);
 
   printm("B", B, X_m, Y_m);
 
@@ -379,7 +381,7 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
     cudaErrorCheck(cudaMemcpy(W, Wt, sizeof(double) * Y_m * X_m,
                               cudaMemcpyDeviceToDevice));
   } else {
-    transpose(cublas_handle, Wt, tmp, W, X_m, Y_m);
+    transpose(*cublas_handle, Wt, tmp, W, X_m, Y_m);
   }
   printm("W", W, Y_m, X_m);
 
@@ -492,7 +494,7 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
   printm("numerator", numerator, 1, 1);
 
   double alpha = 1., beta = 0.;
-  cublasErrorCheck(cublasDgemm(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m, 1,
+  cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m, 1,
                                XY_n, &alpha, Y, Y_m, Y_div, XY_n, &beta,
                                Y_average, Y_m));
   printm("avg", Y_average, Y_m, 1);

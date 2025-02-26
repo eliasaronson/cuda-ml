@@ -9,7 +9,7 @@ FetchContent_Declare(backward
 FetchContent_MakeAvailable(backward)
 
 add_executable(host_online_regression host_online_regression.cc)
-target_link_libraries(host_online_regression cuda_ml Backward::Interface CUDA::cublas CUDA::cusolver -lbfd -ldl)
+target_link_libraries(host_online_regression cuda_ml Backward::Interface -lbfd -ldl)
 
 # add_executable(device_online_regression device_online_regression.cu)
-# target_link_libraries(device_online_regression cuda_ml Backward::Interface CUDA::cublas CUDA::cusolver)
+# target_link_libraries(device_online_regression cuda_ml Backward::Interface -lbfd -ldl)
