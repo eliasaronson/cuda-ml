@@ -2,7 +2,6 @@
 #include <vector>
 // #include <thrust/device_vector.h>
 
-// TODO: Remove debug prints
 // TODO: Naming case styles
 // TODO: change to templates or just use float?? How does this affect accuracy
 // and performance?

@@ -142,7 +142,6 @@ std::vector<double> online_regression::predict(const std::vector<double> &X,
     cudaErrorCheck(cudaMemcpy(Y.data(), d_Y, sizeof(double) * Y.size(),
                               cudaMemcpyDeviceToHost));
 
-    printm("Y pred", d_Y, Y_features, n_samples);
     cudaErrorCheck(cudaFree(d_X));
     cudaErrorCheck(cudaFree(d_Y));
 
@@ -153,8 +152,6 @@ std::vector<double> online_regression::predict(const std::vector<double> &X,
 double *online_regression::predict(double *X, double *Y, size_t X_m, size_t Y_m,
                                    size_t XY_n) {
     double alpha = 1, beta = 0;
-
-    printm("X test", X, X_m, XY_n);
 
     // Y = W * X
     cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
@@ -211,9 +208,6 @@ void online_regression::partial_fit(double *X, double *Y, size_t X_m,
                                     size_t Y_m, size_t XY_n) {
     double alpha = 1, beta = 0;
 
-    // printm("X", X, X_m, XY_n);
-    // printm("Y", Y, Y_m, XY_n);
-
     // Allocate temporary and accumulation matrices. Don't reallocate these each
     // time for performance reasons.
     if (num_x_features == 0) {
@@ -244,26 +238,19 @@ void online_regression::partial_fit(double *X, double *Y, size_t X_m,
     cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, Y_m,
                                  X_m, XY_n, &alpha, Y, Y_m, X, X_m, &beta, YXt,
                                  Y_m));
-    printm("YXt", YXt, Y_m, X_m);
-
     // X * Xᵀ
     cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, X_m,
                                  X_m, XY_n, &alpha, X, X_m, X, X_m, &beta, XXt,
                                  X_m));
-
-    printm("XXt", XXt, X_m, X_m);
 
     // Accumulate YXᵀ and XXᵀ for further partial fits or to fully solve
     cublasErrorCheck(cublasDgeam(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
                                  X_m, &alpha, YXt_partial, Y_m, &alpha, YXt,
                                  Y_m, YXt_partial, Y_m));
 
-    printm("YXt_partial", YXt_partial, Y_m, X_m);
-
     cublasErrorCheck(cublasDgeam(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, X_m,
                                  X_m, &alpha, XXt_partial, X_m, &alpha, XXt,
                                  X_m, XXt_partial, X_m));
-    printm("XXt_partial", XXt_partial, X_m, X_m);
 }
 
 void online_regression::fit(const std::vector<double> &X, size_t X_features,
@@ -293,8 +280,6 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
         partial_fit(X, Y, X_m, Y_m, XY_n);
     }
 
-    printm("A", XXt_partial, X_m, X_m);
-
     if (ridge != 0) {
         printf("ridge: %f\n", ridge);
         int block_size;
@@ -305,9 +290,7 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
                                            add_ridge, 0, 0);
 
         grid_size = (X_m + block_size - 1) / block_size;
-        printm("Pred ridge A", XXt_partial, X_m, X_m);
         add_ridge<<<grid_size, block_size>>>(XXt_partial, ridge, X_m);
-        printm("Post ridge A", XXt_partial, X_m, X_m);
     }
 
     // B is now (YXᵀ)ᵀ. tmp is used for temporary storage in transposes.
@@ -318,8 +301,6 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
     cudaMalloc(&tmp, sizeof(double) * X_m * Y_m);
 
     transpose(*cublas_handle, YXt_partial, tmp, B, Y_m, X_m);
-
-    printm("B", B, X_m, Y_m);
 
     /* Allocate data for settings and work */
     int niter = 0;
@@ -374,9 +355,7 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
         cusolver_handle, gels_irs_params, gels_irs_infos, X_m, X_m, Y_m,
         XXt_partial, X_m, B, X_m, Wt, X_m, work, work_size, &niter, info));
 
-    printm("Wt", Wt, X_m, Y_m);
-
-    printf("solver iterations: %i\n", niter);
+    printf("Solver iterations: %i\n", niter);
 
     // No need to transpose if W is a vector
     if (X_m == 1 || Y_m == 1) {
@@ -385,7 +364,6 @@ void online_regression::fit(double *X, double *Y, size_t X_m, size_t Y_m,
     } else {
         transpose(*cublas_handle, Wt, tmp, W, X_m, Y_m);
     }
-    printm("W", W, Y_m, X_m);
 
 #define CHECK_AND_FREE(PTR, FREE)                                              \
     if (PTR != nullptr) {                                                      \
@@ -484,8 +462,6 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
 
     // Get prediction
     predict(X, Y_pred, X_m, Y_m, XY_n);
-    printm("Y", Y, Y_m, XY_n);
-    printm("Y_pred", Y_pred, Y_m, XY_n);
 
     // We should not be register limited, so should not be a problem to max out
     // the blocks when we have large matrices. Might be more efficient to use
@@ -498,17 +474,14 @@ double online_regression::score(double *X, double *Y, size_t X_m, size_t Y_m,
     grid_dim.x = (y_sz + block_dim.x - 1) / block_dim.x;
     r2_numerator<32>
         <<<grid_dim, block_dim>>>(numerator, Y_padded, Y_pred, y_sz);
-    printm("numerator", numerator, 1, 1);
 
     double alpha = 1., beta = 0.;
     cublasErrorCheck(cublasDgemm(*cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, Y_m,
                                  1, XY_n, &alpha, Y, Y_m, Y_div, XY_n, &beta,
                                  Y_average, Y_m));
-    printm("avg", Y_average, Y_m, 1);
 
     r2_denominator<32>
         <<<grid_dim, block_dim>>>(denominator, Y, Y_average, Y_m, Y_m * XY_n);
-    printm("denominator", denominator, 1, 1);
 
     double h_denominator, h_numerator;
     cudaMemcpy(&h_numerator, numerator, sizeof(double), cudaMemcpyDeviceToHost);
